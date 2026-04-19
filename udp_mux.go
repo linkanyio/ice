@@ -143,18 +143,27 @@ func (m *UDPMuxDefault) HandleStunMessage(msg *stun.Message, addr *net.UDPAddr) 
 	if destinationConn == nil {
 		attr, stunAttrErr := msg.Get(stun.AttrUsername)
 		if stunAttrErr != nil {
-			m.params.Logger.Warnf("No Username attribute in STUN message from %s", addr.String())
+			m.params.Logger.Debugf("No Username attribute in STUN message from %s", addr.String())
 			return false, fmt.Errorf("No Username attribute in STUN message from %s", addr.String())
 		}
 
 		ufrag := strings.Split(string(attr), ":")[0]
 		isIPv6 := addr.IP.To4() == nil
 
-		m.params.Logger.Infof("Received STUN message from %s, ufrag: %s, isIpv6: %v, m is: %v", addr.String(), ufrag, isIPv6, m)
 		m.mu.Lock()
 		destinationConn, _ = m.getConn(ufrag, isIPv6)
-		m.params.Logger.Infof("Destination conn: %v", destinationConn)
 		m.mu.Unlock()
+
+		// Register the sender's address in addressMap so that subsequent packets
+		// from this address (including Binding Success Responses, which carry no
+		// Username attribute) are dispatched directly without requiring another
+		// ufrag lookup.  This is the critical path for ICE keepalive responses:
+		// the initiator sends a Binding Request (has Username) → we learn the
+		// address here → the Binding Success Response (no Username) arrives from
+		// the same address and is routed correctly via addressMap.
+		if destinationConn != nil {
+			m.registerConnForAddress(destinationConn, udpAddr)
+		}
 	}
 
 	if destinationConn == nil {
